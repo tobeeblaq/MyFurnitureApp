@@ -1,15 +1,24 @@
 """Flask routes for MyFurnitureApp.
 
-Pages: /login (log in), / (catalogue / home page + current order),
-/orders (order history), plus form-handling routes for adding items to the
-order and confirming it. See architecture.md for how these fit together.
+Pages: /login (log in), / (catalogue + balance), /orders (order history),
+plus /buy for placing a real order through the furniture shop API. See
+architecture.md for how these fit together.
 """
-import base64
+import os
+import uuid
 
-from flask import Flask, Response, abort, flash, redirect, render_template, request, session, url_for
+from dotenv import load_dotenv
+from flask import Flask, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
 import db
+import shop_api
+
+load_dotenv()
+
+# The shop API only knows about one real account for this whole training
+# exercise - every demo login in our app (alice@, bob@) acts through it.
+SHOP_USER_ID = os.environ.get("SHOP_USER_ID")
 
 app = Flask(__name__)
 # Signs the session cookie. Fine for a local demo; a real deployment would
@@ -24,12 +33,15 @@ def current_user():
     return db.get_user_by_id(user_id)
 
 
-def cart_with_total():
-    """The cart lives in the session as a list of {product_id, name, price,
-    quantity} dicts, built up as the buyer clicks "Add to order"."""
-    cart = session.get("cart", [])
-    total = sum(item["price"] * item["quantity"] for item in cart)
-    return cart, total
+def fetch_balance():
+    """Returns the real balance from the shop API, or None (with a flashed
+    message) if it couldn't be fetched - callers show "unavailable" instead
+    of crashing the page."""
+    try:
+        return shop_api.get_balance(SHOP_USER_ID)["balance"]
+    except shop_api.ShopApiError as error:
+        flash(f"Could not load your balance right now: {error}")
+        return None
 
 
 @app.route("/")
@@ -38,36 +50,13 @@ def home():
     if user is None:
         return redirect(url_for("login"))
 
-    products = db.get_all_products()
-    cart, cart_total = cart_with_total()
-    remaining_budget = user["budget_total"] - user["budget_spent"]
+    try:
+        products = shop_api.get_catalogue()
+    except shop_api.ShopApiError as error:
+        products = []
+        flash(f"Could not load the catalogue right now: {error}")
 
-    return render_template(
-        "catalogue.html",
-        user=user,
-        products=products,
-        cart=cart,
-        cart_total=cart_total,
-        remaining_budget=remaining_budget,
-    )
-
-
-@app.route("/product-image/<int:product_id>")
-def product_image(product_id):
-    """Serves a product's image as its own small response instead of inlining
-    it into the catalogue page - the MongoDB catalogue stores images as
-    base64 data, and 700+ of those inline on one page would be huge."""
-    product = db.get_product_by_id(product_id)
-    if product is None:
-        abort(404)
-
-    image_url = product["image_url"]
-    if image_url.startswith("data:"):
-        header, encoded = image_url.split(",", 1)
-        mime_type = header.removeprefix("data:").split(";")[0]
-        return Response(base64.b64decode(encoded), mimetype=mime_type)
-
-    return redirect(image_url)
+    return render_template("catalogue.html", user=user, products=products, balance=fetch_balance())
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -82,7 +71,6 @@ def login():
             return render_template("login.html")
 
         session["user_id"] = user["id"]
-        session["cart"] = []
         return redirect(url_for("home"))
 
     return render_template("login.html")
@@ -94,55 +82,33 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.route("/add-to-cart", methods=["POST"])
-def add_to_cart():
+@app.route("/buy", methods=["POST"])
+def buy():
     if current_user() is None:
         return redirect(url_for("login"))
 
-    product = db.get_product_by_id(int(request.form["product_id"]))
-    quantity = int(request.form["quantity"])
+    item_id = request.form["item_id"]
+    quantity = int(request.form.get("quantity", 1))
+    # A fresh key per click - if the click is somehow submitted twice, the
+    # shop API will charge for it twice too. A retry of the *same* attempt
+    # (e.g. the browser resending after a dropped connection) would need to
+    # reuse a key, which isn't a case this simple form triggers.
+    idempotency_key = str(uuid.uuid4())
 
-    if product is not None and quantity > 0:
-        cart = session.get("cart", [])
-        cart.append({
-            "product_id": product["id"],
-            "name": product["name"],
-            "price": product["price"],
-            "quantity": quantity,
-        })
-        session["cart"] = cart
+    try:
+        result = shop_api.place_order(SHOP_USER_ID, item_id, quantity, idempotency_key)
+        flash(
+            f"Order placed! Total ${result['total_price']:.2f}. "
+            f"Remaining balance: ${result['remaining_balance']:.2f}."
+        )
+    except shop_api.ProductNotFoundError:
+        flash("This item is no longer available.")
+    except shop_api.InsufficientBalanceError:
+        flash("Insufficient balance for this order.")
+    except shop_api.ShopApiError as error:
+        flash(f"Could not place this order right now: {error}")
 
     return redirect(url_for("home"))
-
-
-@app.route("/clear-cart", methods=["POST"])
-def clear_cart():
-    session["cart"] = []
-    return redirect(url_for("home"))
-
-
-@app.route("/confirm-order", methods=["POST"])
-def confirm_order():
-    user = current_user()
-    if user is None:
-        return redirect(url_for("login"))
-
-    cart, cart_total = cart_with_total()
-    remaining_budget = user["budget_total"] - user["budget_spent"]
-
-    if not cart:
-        flash("Your order is empty.")
-        return redirect(url_for("home"))
-
-    if cart_total > remaining_budget:
-        over_by = cart_total - remaining_budget
-        flash(f"This order would put you ${over_by:.2f} over budget. Remove something and try again.")
-        return redirect(url_for("home"))
-
-    db.create_order(user["id"], cart)
-    session["cart"] = []
-    flash("Order placed!")
-    return redirect(url_for("orders"))
 
 
 @app.route("/orders")
@@ -151,15 +117,13 @@ def orders():
     if user is None:
         return redirect(url_for("login"))
 
-    orders_with_items = [
-        {"order": order, "items": db.get_items_for_order(order["id"])}
-        for order in db.get_orders_for_user(user["id"])
-    ]
-    remaining_budget = user["budget_total"] - user["budget_spent"]
+    try:
+        past_orders = shop_api.get_order_history(SHOP_USER_ID)
+    except shop_api.ShopApiError as error:
+        past_orders = []
+        flash(f"Could not load order history right now: {error}")
 
-    return render_template(
-        "orders.html", user=user, orders=orders_with_items, remaining_budget=remaining_budget
-    )
+    return render_template("orders.html", user=user, orders=past_orders, balance=fetch_balance())
 
 
 if __name__ == "__main__":

@@ -5,28 +5,39 @@ This is a small, single-server web app. There is no separate frontend/backend sp
 Flask serves both the web pages and handles the logic, which keeps things simple for
 a one-day build.
 
+The catalogue, balance, and orders are **not** stored locally — Flask fetches them
+live from the real Day 1 furniture shop API on every page load. The only thing SQLite
+holds is our own login accounts, because the shop API only has one real account for
+this whole exercise, and our app wants multiple demo logins.
+
 ```
- Browser  <--HTTP-->  Flask (app.py)  <--reads/writes-->  SQLite (furniture.db)
+ Browser  <--HTTP-->  Flask (app.py)  <--HTTPS-->  Furniture shop API (shop_api.py)
+                           |
+                           <--reads/writes--> SQLite (furniture.db) — login accounts only
                            |
                            uses templates/ (HTML) + static/ (CSS)
 ```
 
-1. The browser requests a page (e.g. `/catalogue`).
-2. Flask (`app.py`) checks if the user is logged in (via a session cookie).
-3. Flask asks `db.py` for the data it needs (products, budget, order history).
-4. Flask fills in the relevant Jinja2 template in `templates/` with that data
-   and sends the finished HTML page back to the browser.
-5. When the buyer submits a form (login, add to order, confirm order), the
-   browser sends that data back to Flask, which validates it, updates the
-   database if valid, and re-renders the page (with an error or success message).
+1. The browser requests a page (e.g. `/`).
+2. Flask (`app.py`) checks if the user is logged in (via a session cookie) using
+   `db.py` (SQLite) — this part is entirely local.
+3. Flask calls `shop_api.py`, which makes a real HTTPS request to the furniture
+   shop API for whatever the page needs (catalogue, balance, or order history).
+4. Flask fills in the relevant Jinja2 template in `templates/` with that data and
+   sends the finished HTML page back to the browser.
+5. When the buyer clicks "Buy", the browser POSTs to `/buy`, which calls
+   `shop_api.place_order(...)` — a real order, debiting the real balance — and
+   shows the result (or a friendly error) on the next page load.
 
 ## Why this stack
 - **Flask** — a minimal Python web framework. It's a small, well-documented layer
   over "handle this URL, run this function, return this HTML" — easy to reason
   about without needing to understand a large framework.
-- **SQLite** — the whole database is one file (`furniture.db`) on disk. No server
-  process to install or start, no connection string, no password. Good enough for
-  a single demo user or a few judges clicking around, which is all Day 1 needs.
+- **SQLite** — used only for our own login accounts (`furniture.db`, one file, no
+  server to install). Everything else is live data from the shop API, so there's
+  nothing else to keep in sync.
+- **`requests`** — the standard Python library for making HTTP calls; used in
+  `shop_api.py` to talk to the furniture shop API.
 - **Jinja2 templates** — HTML files with small `{{ variable }}` placeholders and
   `{% if %}` / `{% for %}` blocks. No separate frontend build step, no JavaScript
   framework — what you see in the template file is basically what renders.
@@ -35,9 +46,42 @@ a one-day build.
   the session. No external auth service or library needed for a demo with a
   couple of test accounts.
 
+## The furniture shop API
+Base URL: `https://day1.training.cognitivo.com.au` (hardcoded in `shop_api.py` —
+it's not a secret, only the credentials below are).
+
+| What we need | Endpoint | Notes |
+|---|---|---|
+| Browse the catalogue | `GET /catalogue/search-index` | Fast, no images — `item_id`, `product_name`, `category`, `price`. Deliberately **not** `/catalogue`, which also returns images and is much slower. |
+| Real balance | `GET /users/{user_id}` | Returns `{user_id, name, balance}`. |
+| Place a real order | `POST /orders` | Body: `{"user_id", "items": [{"item_id", "quantity"}]}`. This is also the payment — it debits the balance. |
+| Order history | `GET /orders/{user_id}` | Past orders for this account. |
+
+Auth: every request sends an `X-Api-Key` header, read from the `API_KEY` environment
+variable (`.env`, gitignored — never hardcoded or committed).
+
+**One account for everyone**: the shop API only knows about a single `user_id`
+(`SHOP_USER_ID` in `.env`) for this whole training exercise. Every demo login in our
+app (alice@, bob@) acts through that same account — they'll see the same balance and
+order history as each other, because underneath it's the same real account.
+
+### Error handling
+`shop_api.py` turns HTTP responses into typed exceptions instead of raw status codes,
+so `app.py` can catch them and show a friendly message without crashing:
+
+```
+POST /orders response       shop_api.py raises              app.py shows
+200 OK                      (returns the result)            "Order placed! ..."
+404 Not Found                ProductNotFoundError            "This item is no longer available."
+402 Payment Required         InsufficientBalanceError         "Insufficient balance for this order."
+network error / other        ShopApiError                     a clear message with the detail
+```
+
+Every route that calls `shop_api.py` wraps the call in a `try`/`except` for these
+exceptions — a shop API failure never produces a raw Flask error page.
+
 ## Data model
-This is the shape of the four things the app needs to remember, and how they
-relate to each other.
+The only thing stored locally is who can log into our app:
 
 ```mermaid
 classDiagram
@@ -45,104 +89,26 @@ classDiagram
         int id
         string email
         string password_hash
-        float budget_total
-        float budget_spent
     }
-    class Product {
-        int id
-        string name
-        string description
-        float price
-        string image_url
-    }
-    class Order {
-        int id
-        int user_id
-        datetime created_at
-        float total_amount
-    }
-    class OrderItem {
-        int id
-        int order_id
-        int product_id
-        int quantity
-        float unit_price
-    }
-
-    User "1" --> "0..*" Order : places
-    Order "1" --> "1..*" OrderItem : contains
-    Product "1" --> "0..*" OrderItem : appears in
 ```
 
-In plain English:
-
-- **User** is a shopper's account: their login (email + password_hash — the
-  password itself is never stored, only a scrambled/hashed version) plus their
-  budget. `budget_total` is what they started with, `budget_spent` is a running
-  total of everything they've spent so far; "remaining budget" shown on screen
-  is just `budget_total - budget_spent`.
-- **Product** is one item in the furniture catalogue — name, description,
-  price, and a picture. Products don't know anything about users or orders;
-  they're just the shelf of things available to buy.
-- **Order** is a single "receipt" — one buyer, placed at one moment in time,
-  with one total cost. One user can place many orders over time (that's the
-  order history page), but each order belongs to exactly one user.
-- **OrderItem** is a line on that receipt: "2x Oak Desk", "1x Office Chair".
-  An order is made up of one or more of these. Each line points at which
-  product it was, and copies that product's price into `unit_price` at the
-  moment of purchase — so if a product's price changes later, past orders
-  still show what the buyer actually paid, not today's price.
-
-So the flow is: a **User** places an **Order**, and an **Order** is really
-just a bundle of **OrderItems**, each of which refers back to a **Product**
-from the catalogue.
-
-### Where the products come from
-The catalogue isn't hand-typed — `seed_data.py` loads it from a shared MongoDB
-training database (762 real furniture items) and copies it into the `products`
-table, replacing whatever was there before. The connection string lives in a
-`MONGODB_URI` environment variable (set via a local `.env` file, never
-hardcoded or committed) so the credentials stay out of the source code.
-
-MongoDB's documents don't have a ready-made description or image link — each
-one has a `category`, `colours`, dimensions, and an image as base64-encoded
-bytes (despite being called `image_url`). `seed_data.py` turns that into:
-- `description`: a sentence built from category + colours + dimensions.
-- `image_url`: a `data:image/jpeg;base64,...` URI, so the picture is fully
-  self-contained in the database — no internet connection needed to view it
-  after the initial import.
-
-Because embedding 700+ of those base64 images directly into one HTML page
-would make the catalogue page tens of megabytes, the page itself only
-contains `<img src="/product-image/<id>">` tags; `app.py`'s `product_image`
-route decodes and serves each image individually, on request, the way a
-normal image URL would work.
-
-If `MONGODB_URI` isn't set, or the database can't be reached, `seed_data.py`
-falls back to a handful of placeholder products instead of leaving the
-catalogue empty.
-
-Budget check on order confirmation:
-```
-order_total = sum(quantity * unit_price for each item in the order)
-if order_total > (user.budget_total - user.budget_spent):
-    reject with an error message
-else:
-    save the order, save its items, increase user.budget_spent by order_total
-```
+`User` here is just our own login gate (email + a hashed password — the password
+itself is never stored). It has no budget, no products, no orders — those all live
+in the shop API and are fetched live, not mirrored locally.
 
 ## Folder structure
 ```
 MyFurnitureApp/
-├── app.py            # routes: /login, /logout, /catalogue, /order, /orders
-├── db.py             # opens the SQLite connection; functions like get_products(),
-│                      #   get_user_by_email(), create_order(), get_orders_for_user()
-├── seed_data.py       # creates the tables (if missing) and inserts demo users +
-│                      #   sample furniture products
-├── requirements.txt   # flask, and whatever else is needed
+├── app.py            # routes: /login, /logout, / (catalogue + balance), /buy, /orders
+├── shop_api.py        # HTTP client for the real furniture shop API + typed errors
+├── db.py             # opens the SQLite connection; login-account queries only
+├── seed_data.py       # creates the users table and inserts demo login accounts
+├── requirements.txt   # flask, requests, python-dotenv
+├── .env               # API_KEY, SHOP_USER_ID (gitignored, never committed)
+├── .env.example       # template showing what .env needs
 ├── furniture.db       # the SQLite database file (generated, not edited by hand)
 ├── templates/
-│   ├── base.html       # shared header/nav + budget display, other pages extend this
+│   ├── base.html       # shared header/nav + balance display, other pages extend this
 │   ├── login.html
 │   ├── catalogue.html
 │   └── orders.html
@@ -150,14 +116,16 @@ MyFurnitureApp/
     └── style.css
 ```
 
-## Request flow example: placing an order
-1. Buyer is on `/catalogue`, adds "Oak Desk x2" and "Office Chair x1" to their order.
-2. Buyer clicks "Confirm order" → browser POSTs the cart contents to `/order`.
-3. `app.py`'s `/order` route asks `db.py` for the buyer's remaining budget and
-   the current price of each product, computes the total.
-4. If the total fits the budget: `db.py` inserts a row into `orders` and one row
-   per item into `order_items`, then updates `budget_spent` on the user.
-5. If it doesn't fit: no database changes happen; the catalogue page re-renders
-   with an error message showing how far over budget the order would be.
-6. Either way, the buyer sees an updated "remaining budget" figure at the top
-   of the page.
+## Request flow example: buying something
+1. Buyer is on `/`, which shows the live catalogue (`shop_api.get_catalogue()`) and
+   their live balance (`shop_api.get_balance(...)`).
+2. Buyer sets a quantity and clicks "Buy" on a product → browser POSTs `item_id` and
+   `quantity` to `/buy`.
+3. `app.py`'s `/buy` route calls `shop_api.place_order(...)`, which sends a real
+   `POST /orders` request — this is the real payment, not a local calculation.
+4. If it succeeds: flash a confirmation with the order total and the new remaining
+   balance (both come straight from the API's response — no local math).
+5. If it fails: flash "Insufficient balance for this order.", "This item is no
+   longer available.", or a generic clear message — never a raw error page.
+6. Either way, the buyer is redirected back to `/`, which re-fetches the live
+   balance, so the number on screen is always the real current balance.

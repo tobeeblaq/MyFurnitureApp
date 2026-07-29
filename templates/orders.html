@@ -3,21 +3,21 @@
 <h1>Order history</h1>
 
 {% if orders %}
-    {% for entry in orders %}
+    {% for order in orders %}
     <div class="order-card">
-        <h3>Order #{{ entry['order']['id'] }} - {{ entry['order']['created_at'] }}</h3>
+        <h3>Order #{{ order['order_id'] }}{% if order['timestamp'] %} - {{ order['timestamp'] }}{% endif %}</h3>
         <table>
             <tr><th>Product</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr>
-            {% for item in entry['items'] %}
+            {% for item in order['items'] %}
             <tr>
-                <td>{{ item['product_name'] }}</td>
+                <td>{{ item['product_name'] or item['product_id'] }}</td>
                 <td>{{ item['quantity'] }}</td>
                 <td>${{ "%.2f"|format(item['unit_price']) }}</td>
                 <td>${{ "%.2f"|format(item['unit_price'] * item['quantity']) }}</td>
             </tr>
             {% endfor %}
         </table>
-        <p class="cart-total">Order total: <strong>${{ "%.2f"|format(entry['order']['total_amount']) }}</strong></p>
+        <p class="cart-total">Order total: <strong>${{ "%.2f"|format(order['total_amount']) }}</strong></p>
     </div>
     {% endfor %}
 {% else %}
