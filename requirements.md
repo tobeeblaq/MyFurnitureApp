@@ -47,4 +47,5 @@
 - Payments / real checkout.
 - Multiple concurrent shoppers on the same account.
 - User self-registration (demo accounts are pre-seeded instead).
-- Admin panel for editing the catalogue (products come from `seed_data.py`).
+- Admin panel for editing the catalogue (products are loaded from a shared
+  MongoDB training database by `seed_data.py` - see architecture.md).

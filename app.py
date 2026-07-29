@@ -4,7 +4,9 @@ Pages: /login (log in), / (catalogue / home page + current order),
 /orders (order history), plus form-handling routes for adding items to the
 order and confirming it. See architecture.md for how these fit together.
 """
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+import base64
+
+from flask import Flask, Response, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
 import db
@@ -48,6 +50,24 @@ def home():
         cart_total=cart_total,
         remaining_budget=remaining_budget,
     )
+
+
+@app.route("/product-image/<int:product_id>")
+def product_image(product_id):
+    """Serves a product's image as its own small response instead of inlining
+    it into the catalogue page - the MongoDB catalogue stores images as
+    base64 data, and 700+ of those inline on one page would be huge."""
+    product = db.get_product_by_id(product_id)
+    if product is None:
+        abort(404)
+
+    image_url = product["image_url"]
+    if image_url.startswith("data:"):
+        header, encoded = image_url.split(",", 1)
+        mime_type = header.removeprefix("data:").split(";")[0]
+        return Response(base64.b64decode(encoded), mimetype=mime_type)
+
+    return redirect(image_url)
 
 
 @app.route("/login", methods=["GET", "POST"])

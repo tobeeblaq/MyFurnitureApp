@@ -97,6 +97,31 @@ So the flow is: a **User** places an **Order**, and an **Order** is really
 just a bundle of **OrderItems**, each of which refers back to a **Product**
 from the catalogue.
 
+### Where the products come from
+The catalogue isn't hand-typed — `seed_data.py` loads it from a shared MongoDB
+training database (762 real furniture items) and copies it into the `products`
+table, replacing whatever was there before. The connection string lives in a
+`MONGODB_URI` environment variable (set via a local `.env` file, never
+hardcoded or committed) so the credentials stay out of the source code.
+
+MongoDB's documents don't have a ready-made description or image link — each
+one has a `category`, `colours`, dimensions, and an image as base64-encoded
+bytes (despite being called `image_url`). `seed_data.py` turns that into:
+- `description`: a sentence built from category + colours + dimensions.
+- `image_url`: a `data:image/jpeg;base64,...` URI, so the picture is fully
+  self-contained in the database — no internet connection needed to view it
+  after the initial import.
+
+Because embedding 700+ of those base64 images directly into one HTML page
+would make the catalogue page tens of megabytes, the page itself only
+contains `<img src="/product-image/<id>">` tags; `app.py`'s `product_image`
+route decodes and serves each image individually, on request, the way a
+normal image URL would work.
+
+If `MONGODB_URI` isn't set, or the database can't be reached, `seed_data.py`
+falls back to a handful of placeholder products instead of leaving the
+catalogue empty.
+
 Budget check on order confirmation:
 ```
 order_total = sum(quantity * unit_price for each item in the order)
