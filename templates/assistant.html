@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Ask the assistant</h1>
+<p class="hint">
+    Try "what's the cheapest bar stool", "show me black chairs", or
+    "buy me a bar table" - the assistant can browse, look things up, check
+    balance, and place real orders. Buying always asks you to confirm the
+    price first, in a follow-up message, before anything is actually charged.
+</p>
+
+{% if pending_purchase %}
+<p class="hint">
+    <strong>Waiting for your confirmation:</strong>
+    {{ pending_purchase['quantity'] }}x {{ pending_purchase['product_name'] }}
+    for ${{ "%.2f"|format(pending_purchase['total']) }}. Reply "yes" to confirm,
+    or ask for something else.
+</p>
+{% endif %}
+
+<form method="post" class="login-form">
+    <label>Your request
+        <input type="text" name="message" value="{{ question }}" required autofocus>
+    </label>
+    <button type="submit">Ask</button>
+</form>
+
+{% if reply %}
+<section class="cart">
+    <h2>Reply</h2>
+    <p>{{ reply }}</p>
+
+    {% if trace %}
+    <h3>What it did</h3>
+    <ul>
+        {% for line in trace %}
+        <li>{{ line }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</section>
+{% endif %}
+{% endblock %}

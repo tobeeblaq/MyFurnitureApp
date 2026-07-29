@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
+import agent
 import db
 import shop_api
 
@@ -109,6 +110,40 @@ def buy():
         flash(f"Could not place this order right now: {error}")
 
     return redirect(url_for("home"))
+
+
+@app.route("/assistant", methods=["GET", "POST"])
+def assistant():
+    user = current_user()
+    if user is None:
+        return redirect(url_for("login"))
+
+    question = ""
+    reply = None
+    trace = []
+
+    if request.method == "POST":
+        question = request.form.get("message", "").strip()
+        if not question:
+            flash("Type a request first.")
+        else:
+            try:
+                reply, trace, pending = agent.ask(
+                    question, SHOP_USER_ID, session.get("pending_purchase")
+                )
+                session["pending_purchase"] = pending
+            except agent.AgentError as error:
+                flash(str(error))
+
+    return render_template(
+        "assistant.html",
+        user=user,
+        balance=fetch_balance(),
+        question=question,
+        reply=reply,
+        trace=trace,
+        pending_purchase=session.get("pending_purchase"),
+    )
 
 
 @app.route("/orders")

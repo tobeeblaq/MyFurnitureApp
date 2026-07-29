@@ -35,9 +35,11 @@ def _headers():
     return {"X-Api-Key": api_key}
 
 
-def _get(path):
+def _get(path, params=None):
     try:
-        response = requests.get(f"{BASE_URL}{path}", headers=_headers(), timeout=TIMEOUT_SECONDS)
+        response = requests.get(
+            f"{BASE_URL}{path}", headers=_headers(), params=params, timeout=TIMEOUT_SECONDS
+        )
     except requests.exceptions.RequestException as error:
         raise ShopApiError(f"Could not reach the furniture shop ({error}).") from error
 
@@ -46,11 +48,32 @@ def _get(path):
     return response.json()
 
 
-def get_catalogue():
-    """All products for browsing: item_id, product_name, category, price -
-    this is the fast search-index endpoint, not the image-heavy /catalogue
-    one (see the Day 1 Participant Guide)."""
-    return _get("/catalogue/search-index")
+def get_catalogue(category=None):
+    """Products for browsing: item_id, product_name, category, price, colours -
+    this is the fast search-index endpoint, not the image-heavy /catalogue one
+    (see the Day 1 Participant Guide). category must match an existing category
+    name exactly - there's no fuzzy, price, or colour filtering on the server,
+    so anything like "cheap" or a colour has to be judged over these results by
+    whoever calls this (see agent.py)."""
+    params = {"category": category} if category else None
+    return _get("/catalogue/search-index", params=params)
+
+
+def get_product(item_id):
+    """One exact product by item_id, with full details. Not for searching -
+    only for looking up an item you already have the ID for."""
+    try:
+        response = requests.get(
+            f"{BASE_URL}/catalogue/{item_id}", headers=_headers(), timeout=TIMEOUT_SECONDS
+        )
+    except requests.exceptions.RequestException as error:
+        raise ShopApiError(f"Could not reach the furniture shop ({error}).") from error
+
+    if response.status_code == 404:
+        raise ProductNotFoundError(f"No product with item_id '{item_id}'.")
+    if not response.ok:
+        raise ShopApiError(f"The furniture shop returned an error ({response.status_code}).")
+    return response.json()
 
 
 def get_balance(user_id):
