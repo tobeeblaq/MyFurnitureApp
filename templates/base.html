@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MyFurnitureApp</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">MyFurnitureApp</div>
+        {% if user %}
+            <div class="budget">Remaining budget: <strong>${{ "%.2f"|format(remaining_budget) }}</strong></div>
+            <nav>
+                <a href="{{ url_for('home') }}">Catalogue</a>
+                <a href="{{ url_for('orders') }}">Order history</a>
+                <a href="{{ url_for('logout') }}">Logout ({{ user['email'] }})</a>
+            </nav>
+        {% endif %}
+    </header>
+
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <ul class="flash">
+                {% for message in messages %}
+                    <li>{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

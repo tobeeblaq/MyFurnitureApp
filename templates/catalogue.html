@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Catalogue</h1>
+
+<div class="product-grid">
+    {% for product in products %}
+    <div class="product-card">
+        <img src="{{ product['image_url'] }}" alt="{{ product['name'] }}">
+        <h3>{{ product['name'] }}</h3>
+        <p>{{ product['description'] }}</p>
+        <p class="price">${{ "%.2f"|format(product['price']) }}</p>
+        <form method="post" action="{{ url_for('add_to_cart') }}" class="add-form">
+            <input type="hidden" name="product_id" value="{{ product['id'] }}">
+            <input type="number" name="quantity" value="1" min="1" required>
+            <button type="submit">Add to order</button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+
+<section class="cart">
+    <h2>Current order</h2>
+    {% if cart %}
+        <table>
+            <tr><th>Product</th><th>Qty</th><th>Price</th><th>Line total</th></tr>
+            {% for item in cart %}
+            <tr>
+                <td>{{ item['name'] }}</td>
+                <td>{{ item['quantity'] }}</td>
+                <td>${{ "%.2f"|format(item['price']) }}</td>
+                <td>${{ "%.2f"|format(item['price'] * item['quantity']) }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        <p class="cart-total">
+            Order total: <strong>${{ "%.2f"|format(cart_total) }}</strong>
+            &nbsp;vs remaining budget: <strong>${{ "%.2f"|format(remaining_budget) }}</strong>
+        </p>
+        <form method="post" action="{{ url_for('confirm_order') }}" class="inline-form">
+            <button type="submit">Confirm order</button>
+        </form>
+        <form method="post" action="{{ url_for('clear_cart') }}" class="inline-form">
+            <button type="submit" class="secondary">Clear order</button>
+        </form>
+    {% else %}
+        <p>No items yet - add something from the catalogue above.</p>
+    {% endif %}
+</section>
+{% endblock %}

@@ -36,12 +36,66 @@ a one-day build.
   couple of test accounts.
 
 ## Data model
-- **User**: id, email, password_hash, budget_total, budget_spent
-- **Product**: id, name, description, price, image_url
-- **Order**: id, user_id, created_at, total_amount
-- **OrderItem**: id, order_id, product_id, quantity, unit_price
-  (unit_price is copied from the product at order time, so historical orders
-  still show the correct price even if a product's price changes later)
+This is the shape of the four things the app needs to remember, and how they
+relate to each other.
+
+```mermaid
+classDiagram
+    class User {
+        int id
+        string email
+        string password_hash
+        float budget_total
+        float budget_spent
+    }
+    class Product {
+        int id
+        string name
+        string description
+        float price
+        string image_url
+    }
+    class Order {
+        int id
+        int user_id
+        datetime created_at
+        float total_amount
+    }
+    class OrderItem {
+        int id
+        int order_id
+        int product_id
+        int quantity
+        float unit_price
+    }
+
+    User "1" --> "0..*" Order : places
+    Order "1" --> "1..*" OrderItem : contains
+    Product "1" --> "0..*" OrderItem : appears in
+```
+
+In plain English:
+
+- **User** is a shopper's account: their login (email + password_hash — the
+  password itself is never stored, only a scrambled/hashed version) plus their
+  budget. `budget_total` is what they started with, `budget_spent` is a running
+  total of everything they've spent so far; "remaining budget" shown on screen
+  is just `budget_total - budget_spent`.
+- **Product** is one item in the furniture catalogue — name, description,
+  price, and a picture. Products don't know anything about users or orders;
+  they're just the shelf of things available to buy.
+- **Order** is a single "receipt" — one buyer, placed at one moment in time,
+  with one total cost. One user can place many orders over time (that's the
+  order history page), but each order belongs to exactly one user.
+- **OrderItem** is a line on that receipt: "2x Oak Desk", "1x Office Chair".
+  An order is made up of one or more of these. Each line points at which
+  product it was, and copies that product's price into `unit_price` at the
+  moment of purchase — so if a product's price changes later, past orders
+  still show what the buyer actually paid, not today's price.
+
+So the flow is: a **User** places an **Order**, and an **Order** is really
+just a bundle of **OrderItems**, each of which refers back to a **Product**
+from the catalogue.
 
 Budget check on order confirmation:
 ```
