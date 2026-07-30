@@ -1,16 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Log in</h1>
-<form method="post" class="login-form">
-    <label>Email
-        <input type="email" name="email" required>
-    </label>
-    <label>Password
-        <input type="password" name="password" required>
-    </label>
-    <button type="submit">Log in</button>
-</form>
-<p class="hint">
-    Demo accounts: alice@example.com / password123, bob@example.com / password123
-</p>
+<div class="auth-card">
+    <h1>Welcome Back</h1>
+    <p class="auth-subtitle">Log in to browse the real catalogue and your real balance.</p>
+    <form method="post" class="login-form">
+        <label>Email
+            <input type="email" name="email" required>
+        </label>
+        <label>Password
+            <input type="password" name="password" required>
+        </label>
+        <button type="submit">Log In</button>
+    </form>
+    <p class="demo-hint">
+        Demo accounts: alice@example.com / password123, bob@example.com / password123
+    </p>
+</div>
 {% endblock %}

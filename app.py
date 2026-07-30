@@ -5,15 +5,64 @@ plus /buy for placing a real order through the furniture shop API. See
 architecture.md for how these fit together.
 """
 import os
+import re
 import uuid
 
 from dotenv import load_dotenv
 from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask_cors import CORS
+from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash
 
 import agent
 import db
 import shop_api
+from api import register_api_routes
+
+_BULLET_LINE = re.compile(r"^\s*(?:[-*]|\d+[).])\s+(.*)")
+
+
+def format_agent_reply(text):
+    """Turns the agent's plain-text reply into simple HTML: lines that look
+    like a bullet ("- ", "* ") or numbered ("1)", "2.") list become an actual
+    <ul>, everything else becomes paragraphs. Every line is escaped first, so
+    nothing in the model's reply (or catalogue text reflected through it) can
+    inject raw HTML."""
+    if not text:
+        return Markup("")
+
+    html_parts = []
+    list_items = []
+    paragraph_lines = []
+
+    def flush_list():
+        if list_items:
+            html_parts.append("<ul>" + "".join(f"<li>{item}</li>" for item in list_items) + "</ul>")
+            list_items.clear()
+
+    def flush_paragraph():
+        if paragraph_lines:
+            html_parts.append("<p>" + "<br>".join(paragraph_lines) + "</p>")
+            paragraph_lines.clear()
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush_list()
+            flush_paragraph()
+            continue
+
+        match = _BULLET_LINE.match(line)
+        if match:
+            flush_paragraph()
+            list_items.append(str(escape(match.group(1))))
+        else:
+            flush_list()
+            paragraph_lines.append(str(escape(line)))
+
+    flush_list()
+    flush_paragraph()
+    return Markup("".join(html_parts))
 
 load_dotenv()
 
@@ -25,6 +74,13 @@ app = Flask(__name__)
 # Signs the session cookie. Fine for a local demo; a real deployment would
 # load this from an environment variable instead of hardcoding it.
 app.secret_key = "dev-secret-key-change-this-for-real-use"
+app.jinja_env.filters["agent_reply"] = format_agent_reply
+
+# The Next.js frontend (frontend/) runs on its own dev server (default
+# :3000), a different origin from Flask's :5000, so it needs CORS - with
+# credentials, so the session cookie still travels with each request.
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
+CORS(app, supports_credentials=True, origins=[FRONTEND_ORIGIN])
 
 
 def current_user():
@@ -160,6 +216,8 @@ def orders():
 
     return render_template("orders.html", user=user, orders=past_orders, balance=fetch_balance())
 
+
+register_api_routes(app, current_user, SHOP_USER_ID)
 
 if __name__ == "__main__":
     app.run(debug=True)

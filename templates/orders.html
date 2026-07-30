@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Order history</h1>
+<div class="section-heading">
+    <h1>Order History</h1>
+    {% if orders %}<span class="count">{{ orders|length }} orders</span>{% endif %}
+</div>
 
 {% if orders %}
     {% for order in orders %}

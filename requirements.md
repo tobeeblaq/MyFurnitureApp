@@ -51,6 +51,8 @@
      connection, etc.) are shown as a normal reply from the agent, never a crash. If
      it's unclear whether an order actually went through (e.g. a timeout), the same
      proposal stays pending so confirming again is safe and won't double-charge.
+   - When the agent presents more than one item or option, they're shown as a real
+     bullet list, not a wall of text.
 
 ## Data the app needs to track
 - **Users** (local, for our own login only): id, email, password (hashed, never
@@ -60,8 +62,12 @@ Products, balance, and orders are **not** stored locally — they're fetched liv
 the Day 1 furniture shop API on every page load. See architecture.md for the endpoints.
 
 ## Non-functional requirements
-- Beginner-friendly to set up: one command to install, one command to seed demo
-  login accounts, one command to run.
+- Beginner-friendly to set up: one command to install each half (Python + Node),
+  one command to seed demo login accounts, one command to run each half.
+- The UI is a Next.js (TypeScript, React) frontend; the real logic (login, the shop
+  API client, the AI agent) stays in the Python/Flask backend, which the frontend
+  talks to over a JSON API. See architecture.md.
+- Needs Node.js installed (for the frontend) in addition to Python (for the backend).
 - Requires an internet connection and a valid API key to reach the shop API — the
   catalogue, balance, and orders are all real, live data, not local sample data.
 - The assistant page needs Azure OpenAI access configured (endpoint, key, deployment)

@@ -1,6 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Catalogue</h1>
+<section class="hero">
+    <div class="hero-content">
+        <p class="hero-eyebrow">Real inventory - Live pricing</p>
+        <h1>Furnish Your <em>Everyday</em> Space</h1>
+        <p>Every item below comes straight from the shop's live catalogue - the
+           price, and your balance, are both real.</p>
+        <div class="hero-actions">
+            <a href="{{ url_for('assistant') }}" class="btn">Ask the Assistant</a>
+            <a href="#catalogue" class="btn btn-outline">Browse Catalogue</a>
+        </div>
+        <div class="trust-row">
+            <div class="trust-item"><span class="trust-dot"></span>{{ products|length }} live items</div>
+            <div class="trust-item"><span class="trust-dot"></span>Real balance</div>
+            <div class="trust-item"><span class="trust-dot"></span>Real checkout</div>
+        </div>
+    </div>
+    <div class="hero-visual">
+        <div class="hero-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M4 13V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M3 13h18v3a1 1 0 0 1-1 1h-1v3h-2v-3H6v3H4v-3H3a1 1 0 0 1 0-1z" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M6 6V4h2M18 6V4h-2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </div>
+    </div>
+</section>
+
+<div class="section-heading" id="catalogue">
+    <h2>Catalogue</h2>
+    {% if products %}<span class="count">{{ products|length }} items</span>{% endif %}
+</div>
 
 {% if products %}
 <div class="product-grid">

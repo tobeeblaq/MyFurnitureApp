@@ -24,7 +24,11 @@ readable, and well commented for a non-coder to follow along.
   first, and only places the real order once a later message confirms it.
 
 ## Tech stack
-- **Python 3 + Flask** — the web framework (handles pages and form submissions).
+- **Python 3 + Flask** — the backend. Owns all the real logic: login, the shop API
+  client, and the AI agent. Exposes it two ways at once (see below).
+- **A Next.js (TypeScript, React, App Router) frontend** (`frontend/`) — the primary
+  UI. Talks to Flask only through the JSON API in `api.py`, never directly to the
+  shop API or Azure OpenAI.
 - **SQLite** — a single file, `furniture.db`, holding only our own login accounts
   (email + password hash). Nothing about products, balance, or orders lives here —
   see "Where the real data comes from" below.
@@ -32,13 +36,21 @@ readable, and well commented for a non-coder to follow along.
   catalogue, balance, and orders. See architecture.md for the endpoints used.
 - **Azure OpenAI** (`agent.py`) — powers the "Ask the assistant" page. Calls the shop
   API through the same four tools, never talks to the shop directly.
-- **Jinja2 templates** — plain HTML pages with small `{{ }}` placeholders for data.
 - **Flask sessions + cookies** — simple hand-written login, no external auth service.
-- Plain CSS for styling — no frontend framework or build step.
+  The Next.js frontend runs on a different port, so Flask uses CORS
+  (`flask-cors`, `supports_credentials=True`) to accept it and let the session
+  cookie travel with each request.
+- **Jinja2 templates** (`templates/`) — the *original* server-rendered pages
+  (login/catalogue/assistant/orders). Still there and still work on their own at
+  `http://localhost:5000` - kept as a simple, dependency-free fallback UI, but the
+  Next.js frontend is what you should build new features against going forward.
 
-Why this stack: everything runs with a single command (`python app.py`), there's nothing
-to install beyond a few `pip` packages, and there's no separate database server or
-account to set up. That matters for a one-day hackathon demo running on a laptop.
+Why this split: Flask alone runs with one command and nothing beyond `pip`, which
+matters for a one-day hackathon demo - but the frontend needed to be Next.js (for
+deploying somewhere Next.js-friendly, e.g. Vercel). Keeping all the real logic in
+Flask and making the frontend a thin JSON-API client means the frontend can deploy
+independently without re-implementing login, the shop API client, or the agent in
+JavaScript.
 
 ## Where the real data comes from
 - **Catalogue** — `GET /catalogue/search-index` (category/name/price, no images — fast).
@@ -83,8 +95,11 @@ twice (this is the shop API's own `Idempotency-Key` contract).
 ## Folder structure
 ```
 MyFurnitureApp/
-├── app.py            # Flask routes: login, catalogue + balance, buy, order history,
-│                      #   /assistant (the AI text box)
+├── app.py            # Flask HTML routes (the original pages) + CORS setup +
+│                      #   registers the JSON API from api.py
+├── api.py             # JSON API for the Next.js frontend: /api/me, /api/login,
+│                      #   /api/logout, /api/catalogue, /api/buy, /api/assistant,
+│                      #   /api/orders - same business logic as app.py's HTML routes
 ├── agent.py           # the AI shopping assistant: tool schemas, Azure OpenAI call,
 │                      #   the tool-call loop
 ├── shop_api.py        # client for the real furniture shop API (catalogue, balance,
@@ -92,38 +107,83 @@ MyFurnitureApp/
 │                      #   InsufficientBalanceError, ShopApiError)
 ├── db.py             # database connection + the users table (local login only)
 ├── seed_data.py       # creates the users table and inserts demo login accounts
-├── requirements.txt   # Python packages to install
+├── requirements.txt   # Python packages to install (now incl. flask-cors)
 ├── .env               # local secrets - shop API_KEY/SHOP_USER_ID, Azure OpenAI
-│                      #   AZURE_ENDPOINT/API_VERSION/DEPLOYMENT/AZURE_API_KEY
-│                      #   (gitignored, never committed)
+│                      #   AZURE_ENDPOINT/API_VERSION/DEPLOYMENT/AZURE_API_KEY,
+│                      #   FRONTEND_ORIGIN (gitignored, never committed)
 ├── .env.example       # template showing what .env needs
 ├── furniture.db       # SQLite database file (created by seed_data.py, not hand-edited)
-├── templates/         # HTML pages rendered by Flask
-│   ├── base.html       # shared layout (nav bar, balance display)
+├── templates/         # the original server-rendered HTML pages (still work standalone)
+│   ├── base.html
 │   ├── login.html
 │   ├── catalogue.html
-│   ├── assistant.html  # the AI text box + reply + "what it did" trace
+│   ├── assistant.html
 │   └── orders.html
 ├── static/
 │   └── style.css
+├── frontend/          # the Next.js app - the primary UI (see its own layout below)
 ├── requirements.md    # what the app needs to do
 └── architecture.md    # how it's built
 ```
 
+`frontend/` (Next.js, TypeScript, App Router):
+```
+frontend/
+├── src/app/
+│   ├── layout.tsx      # root layout: fonts, <AuthProvider><AppShell>
+│   ├── globals.css      # the same design system as static/style.css, ported to CSS
+│   ├── page.tsx         # catalogue/home page ("/")
+│   ├── login/page.tsx
+│   ├── assistant/page.tsx
+│   └── orders/page.tsx
+├── src/components/
+│   ├── AppShell.tsx      # header/nav/balance/logout + footer, reads auth from context
+│   ├── ProductCard.tsx
+│   └── ErrorBanner.tsx
+├── src/lib/
+│   ├── api.ts            # fetch wrapper for every /api/* call (credentials: "include")
+│   ├── AuthContext.tsx    # fetches /api/me once, shares {email, balance} app-wide
+│   ├── useRequireAuth.ts  # redirects to /login if not authenticated
+│   └── formatReply.tsx    # renders the agent's bullet-style replies as real <ul><li>
+├── .env.local          # NEXT_PUBLIC_API_BASE_URL (gitignored)
+└── .env.local.example
+```
+
 ## How to run it (once built)
+This is now two servers - start both.
+
+**Backend (Flask):**
 1. `pip install -r requirements.txt`
 2. Copy `.env.example` to `.env` and fill in `API_KEY`/`SHOP_USER_ID` (from the Day 1
    Participant Guide) and `AZURE_ENDPOINT`/`API_VERSION`/`DEPLOYMENT`/`AZURE_API_KEY`
    (Azure OpenAI access, for the assistant page).
 3. `python seed_data.py` (first time only — creates the database and demo login accounts)
-4. `python app.py`
-5. Open `http://localhost:5000` in a browser
+4. `python app.py` (serves the JSON API, and the original pages, at `:5000`)
+
+**Frontend (Next.js) - in a second terminal:**
+1. `cd frontend && npm install`
+2. Copy `.env.local.example` to `.env.local` (default already points at the local
+   Flask backend)
+3. `npm run dev`
+4. Open `http://localhost:3000` in a browser
+
+(The original pages still work directly at `http://localhost:5000` too, without
+needing Node at all.)
 
 ## Conventions for future changes
-- Keep business logic in `db.py`/`shop_api.py`/`agent.py`/`app.py`, not in templates.
+- Keep business logic in `db.py`/`shop_api.py`/`agent.py`/`app.py`/`api.py`, not in
+  templates or in the Next.js frontend. The frontend should only ever call `/api/*`
+  and render what comes back - no shop API or Azure OpenAI calls from JavaScript.
+- `api.py` never imports from `app.py` (`from app import app` would re-execute
+  app.py as a second module when Flask is run directly, registering routes on a
+  throwaway second Flask instance that never actually serves). Instead, `api.py`
+  exposes `register_api_routes(app, current_user, shop_user_id)`, and `app.py` calls
+  it after those are defined.
 - Never hardcode secrets (API keys, account ids) in code — put them in `.env`
   (gitignored) and read them with `os.environ` / `python-dotenv`. Note `API_KEY` (shop)
   and `AZURE_API_KEY` (Azure OpenAI) are separate variables — don't collide them.
+- If you add a new page to the Next.js frontend, add the matching JSON endpoint to
+  `api.py` first, the same way the existing pages each have one.
 - Any call to the shop API can fail (network issue, item gone, insufficient balance) —
   catch `shop_api.ShopApiError` (and its subclasses) at the route level and flash a
   clear message. Never let a shop API error produce a raw Flask error page. The same

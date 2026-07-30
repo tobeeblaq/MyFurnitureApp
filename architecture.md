@@ -1,42 +1,105 @@
 # Architecture
 
 ## Overview
-This is a small, single-server web app. There is no separate frontend/backend split —
-Flask serves both the web pages and handles the logic, which keeps things simple for
-a one-day build.
+There are now two ways to use this app, both backed by the same Flask process:
 
-The catalogue, balance, and orders are **not** stored locally — Flask fetches them
-live from the real Day 1 furniture shop API on every page load. The only thing SQLite
-holds is our own login accounts, because the shop API only has one real account for
-this whole exercise, and our app wants multiple demo logins.
+1. **The original server-rendered pages** (`templates/`) - Flask does everything,
+   HTML included. Still works standalone at `http://localhost:5000`.
+2. **A Next.js frontend** (`frontend/`) - the primary UI now. It's a plain React
+   app that calls Flask's JSON API (`api.py`) over HTTP; Flask still owns every
+   bit of real logic (login, the shop API client, the AI agent). This split exists
+   because the frontend needed to be deployable somewhere Next.js-friendly (e.g.
+   Vercel) - see "The frontend/backend split" below.
+
+The catalogue, balance, and orders are **not** stored locally either way - Flask
+fetches them live from the real Day 1 furniture shop API on every request. The only
+thing SQLite holds is our own login accounts, because the shop API only has one real
+account for this whole exercise, and our app wants multiple demo logins.
 
 ```
- Browser  <--HTTP-->  Flask (app.py)  <--HTTPS-->  Furniture shop API (shop_api.py)
-                           |    \
-                           |     <--HTTPS--> Azure OpenAI (agent.py) --tool calls--> shop_api.py
-                           <--reads/writes--> SQLite (furniture.db) — login accounts only
-                           |
-                           uses templates/ (HTML) + static/ (CSS)
+ Next.js (frontend/, :3000)  <--fetch, credentials: include-->  Flask (app.py + api.py, :5000)
+ Browser  <--HTTP, templates/-->                                     |    \
+                                                                      |     <--HTTPS--> Azure OpenAI (agent.py)
+                                                          <--reads/writes--> SQLite (login accounts only)
+                                                                      |
+                                                                      <--HTTPS--> Furniture shop API (shop_api.py)
 ```
 
-1. The browser requests a page (e.g. `/`).
-2. Flask (`app.py`) checks if the user is logged in (via a session cookie) using
-   `db.py` (SQLite) — this part is entirely local.
+1. The browser (via Next.js, or directly) requests a page.
+2. Flask checks if the user is logged in (via a session cookie) using `db.py`
+   (SQLite) — this part is entirely local.
 3. Flask calls `shop_api.py`, which makes a real HTTPS request to the furniture
-   shop API for whatever the page needs (catalogue, balance, or order history).
-4. Flask fills in the relevant Jinja2 template in `templates/` with that data and
-   sends the finished HTML page back to the browser.
-5. When the buyer clicks "Buy", the browser POSTs to `/buy`, which calls
-   `shop_api.place_order(...)` — a real order, debiting the real balance — and
-   shows the result (or a friendly error) on the next page load.
-6. On the assistant page, the buyer's typed message goes to `agent.py`, which asks
-   Azure OpenAI what to do. The model calls back into the *same* `shop_api.py`
-   functions as tools (never a separate code path) - see "The AI assistant" below.
+   shop API for whatever's needed (catalogue, balance, order history).
+4. **Server-rendered path:** Flask fills in a Jinja2 template in `templates/` and
+   sends the finished HTML page back. **Next.js path:** Flask's `api.py` route
+   returns the same data as JSON instead; the React page in `frontend/` renders it.
+5. When the buyer buys something, the browser (either path) triggers a real
+   `shop_api.place_order(...)` call — a real order, debiting the real balance.
+6. On the assistant page (either path), the buyer's typed message goes to
+   `agent.py`, which asks Azure OpenAI what to do. The model calls back into the
+   *same* `shop_api.py` functions as tools (never a separate code path) - see
+   "The AI assistant" below.
+
+## The frontend/backend split
+`frontend/` is a Next.js (TypeScript, App Router) app. It owns **no** business
+logic - no shop API calls, no Azure OpenAI calls, no SQLite. Every page is a
+client component ("use client") that calls Flask's JSON API and renders what
+comes back:
+
+- `src/lib/api.ts` - a typed fetch wrapper for every `/api/*` endpoint. Reads the
+  backend's URL from `NEXT_PUBLIC_API_BASE_URL` (`.env.local`), not hardcoded, so
+  it can point at a deployed backend later.
+- `src/lib/AuthContext.tsx` - calls `/api/me` once on load and shares
+  `{email, balance}` app-wide via React context, so every page/the header agree
+  on auth state without each fetching it separately.
+- `src/lib/useRequireAuth.ts` - redirects to `/login` once we know for sure the
+  user isn't authenticated (mirrors `if user is None: return redirect(...)` in
+  the Flask routes).
+- `src/lib/formatReply.tsx` - the AI assistant's bullet-style replies rendered as
+  a real `<ul><li>`, same logic as `app.py`'s `format_agent_reply` Jinja filter,
+  ported to React (React escapes text content by default, so no manual escaping
+  is needed here the way `app.py`'s version needs `markupsafe.escape`).
+
+**Why a separate `api.py` instead of just adding `@app.route("/api/...")` to
+app.py directly:** it's really about *where* the routes get registered, not
+which file they live in. The routes in `api.py` are added via a
+`register_api_routes(app, current_user, shop_user_id)` function that `app.py`
+calls explicitly - `api.py` itself never imports `app.py`. That avoids a real bug
+hit during development: `python app.py` runs the file as `__main__`, so a stray
+`from app import app` inside a module Flask imports would make Python import
+app.py a *second* time as a distinct `app` module, creating a second, unused
+Flask instance that the new routes would register on instead of the one actually
+being served.
+
+**Cross-origin session cookies:** the Next.js dev server (`:3000`) and Flask
+(`:5000`) are different origins, so `app.py` adds CORS via `flask-cors`
+(`supports_credentials=True`, origin from `FRONTEND_ORIGIN` in `.env`, default
+`http://localhost:3000`). Every frontend fetch call passes
+`credentials: "include"` so the session cookie travels both ways. Because both
+origins are `localhost` (just different ports), this is a same-site request, so
+the cookie's default `SameSite=Lax` works without needing `SameSite=None` +
+HTTPS - verified directly: a login POST from an `Origin: http://localhost:3000`
+header returns `Access-Control-Allow-Origin: http://localhost:3000`,
+`Access-Control-Allow-Credentials: true`, and a `Set-Cookie`; a follow-up
+`/api/catalogue` call with that cookie succeeds.
+
+**Deploying later:** the frontend can deploy to Vercel (or similar) on its own by
+setting `NEXT_PUBLIC_API_BASE_URL` to wherever the Flask backend ends up running
+(it needs a host that can keep a Python process alive - Vercel's serverless model
+doesn't fit `furniture.db` or a long-lived session store well, so Flask likely
+wants a small always-on host like Render/Railway/Fly.io instead). Update
+`FRONTEND_ORIGIN` on the Flask side to match the deployed frontend's real URL.
 
 ## Why this stack
 - **Flask** — a minimal Python web framework. It's a small, well-documented layer
   over "handle this URL, run this function, return this HTML" — easy to reason
-  about without needing to understand a large framework.
+  about without needing to understand a large framework. Also perfectly happy to
+  return JSON instead of HTML, which is all `api.py` asks of it.
+- **Next.js** — chosen specifically to be deployable on Next.js-friendly hosting.
+  Plain React function components, no server actions/server components fetching
+  data (everything client-side calls the Flask API) - kept deliberately simple
+  rather than leaning on framework features that would blur the "Flask owns the
+  logic" boundary.
 - **SQLite** — used only for our own login accounts (`furniture.db`, one file, no
   server to install). Everything else is live data from the shop API, so there's
   nothing else to keep in sync.
@@ -45,9 +108,8 @@ this whole exercise, and our app wants multiple demo logins.
 - **Azure OpenAI (`openai` package)** — powers the "Ask the assistant" page.
   `agent.py` gives it four tools that call straight into `shop_api.py` — the
   model never talks to the shop API directly.
-- **Jinja2 templates** — HTML files with small `{{ variable }}` placeholders and
-  `{% if %}` / `{% for %}` blocks. No separate frontend build step, no JavaScript
-  framework — what you see in the template file is basically what renders.
+- **Jinja2 templates** — the original HTML files with small `{{ variable }}`
+  placeholders. No build step, no JavaScript framework — still work standalone.
 - **Session cookie login** — Flask has built-in support for signed session
   cookies. Login just means: check the password, then store the user's id in
   the session. No external auth service or library needed for a demo with a
@@ -164,30 +226,59 @@ in the shop API and are fetched live, not mirrored locally.
 ## Folder structure
 ```
 MyFurnitureApp/
-├── app.py            # routes: /login, /logout, / (catalogue + balance), /buy,
-│                      #   /assistant, /orders
+├── app.py            # HTML routes: /login, /logout, / (catalogue + balance), /buy,
+│                      #   /assistant, /orders - plus CORS setup and registering api.py
+├── api.py             # JSON API for frontend/: /api/me, /api/login, /api/logout,
+│                      #   /api/catalogue, /api/buy, /api/assistant, /api/orders
 ├── agent.py           # AI assistant: tool schemas, Azure OpenAI call, tool-call loop
 ├── shop_api.py        # HTTP client for the real furniture shop API + typed errors
 ├── db.py             # opens the SQLite connection; login-account queries only
 ├── seed_data.py       # creates the users table and inserts demo login accounts
-├── requirements.txt   # flask, requests, python-dotenv, openai
+├── requirements.txt   # flask, flask-cors, requests, python-dotenv, openai
 ├── .env               # API_KEY, SHOP_USER_ID, AZURE_ENDPOINT, API_VERSION,
-│                      #   DEPLOYMENT, AZURE_API_KEY (gitignored, never committed)
+│                      #   DEPLOYMENT, AZURE_API_KEY, FRONTEND_ORIGIN
+│                      #   (gitignored, never committed)
 ├── .env.example       # template showing what .env needs
 ├── furniture.db       # the SQLite database file (generated, not edited by hand)
-├── templates/
-│   ├── base.html       # shared header/nav + balance display, other pages extend this
+├── templates/          # the original server-rendered pages (still work standalone)
+│   ├── base.html
 │   ├── login.html
 │   ├── catalogue.html
-│   ├── assistant.html  # text box + reply + "what it did" trace
+│   ├── assistant.html
 │   └── orders.html
-└── static/
-    └── style.css
+├── static/
+│   └── style.css
+└── frontend/           # the Next.js app - see "The frontend/backend split" above
+    ├── src/app/         # layout.tsx, globals.css, page.tsx, login/, assistant/, orders/
+    ├── src/components/  # AppShell.tsx, ProductCard.tsx, ErrorBanner.tsx
+    ├── src/lib/         # api.ts, AuthContext.tsx, useRequireAuth.ts, formatReply.tsx
+    └── .env.local       # NEXT_PUBLIC_API_BASE_URL (gitignored)
 ```
 
+## Request flow example: browsing and buying via the Next.js frontend
+1. Buyer opens `http://localhost:3000/`. `CataloguePage` (`src/app/page.tsx`) is a
+   client component; on mount it calls `api.catalogue()` → `GET :5000/api/catalogue`
+   with `credentials: "include"`.
+2. `api.py`'s `api_catalogue()` checks `current_user()` (the session cookie),
+   then calls the same `shop_api.get_catalogue()` the HTML page would - returns
+   `{"products": [...]}` as JSON instead of rendering a template.
+3. React renders one `ProductCard` per product. Clicking "Buy" calls
+   `api.buy(item_id, quantity)` → `POST :5000/api/buy` → `api_buy()` →
+   `shop_api.place_order(...)` — the real payment, identical to the `/buy` HTML
+   route's logic, just returning `{"message", "total_price", "remaining_balance"}`
+   instead of a flash message + redirect.
+4. On success, the page calls `refresh()` (from `AuthContext`) to re-fetch
+   `/api/me` so the balance shown in the header updates immediately. On failure,
+   the JSON `{"error": "..."}` (404/402/502, matching `shop_api`'s exception types)
+   is shown via the same `ErrorBanner` component every page uses.
+
 ## Request flow example: buying something via the assistant
+(Works the same whether the buyer is on the Next.js `/assistant` page calling
+`POST /api/assistant`, or the original `/assistant` HTML page - both call
+`agent.ask(...)` with the same session-stored `pending_purchase`.)
+
 1. Buyer is on `/assistant` and types "buy me the cheapest bar stool".
-2. `app.py`'s `/assistant` route calls
+2. The route calls
    `agent.ask(message, SHOP_USER_ID, session.get("pending_purchase"))` — `None` the
    first time, since nothing's pending yet.
 3. `agent.py` sends the message + tool schemas to Azure OpenAI. The model calls

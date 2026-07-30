@@ -52,7 +52,10 @@ If a pending proposal from an earlier message is given to you below, only \
 confirm it if the user's current message clearly agrees to that exact item \
 and quantity.
 
-Keep replies short and plain - this is for a non-technical user.
+Keep replies short and plain - this is for a non-technical user. When you're \
+presenting more than one item or option, format them as a list: one per \
+line, each starting with "- " (a plain dash and a space). Use a normal \
+sentence instead when there's only one thing to say.
 """
 
 TOOLS = [
